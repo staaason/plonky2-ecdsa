@@ -1,5 +1,5 @@
 use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::marker::PhantomData;
 
 use num::{BigUint, Integer, Zero};
@@ -13,6 +13,11 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2_u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
 use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
 use plonky2_u32::witness::{GeneratedValuesU32, WitnessU32};
+use plonky2::util::serialization::IoResult;
+use plonky2::plonk::circuit_data::CommonCircuitData;
+use plonky2::util::serialization::Buffer;
+use crate::serialization::WriteBigUintTarget;
+use crate::serialization::ReadBigUintTarget;
 
 #[derive(Clone, Debug)]
 pub struct BigUintTarget {
@@ -322,7 +327,7 @@ struct BigUintDivRemGenerator<F: RichField + Extendable<D>, const D: usize> {
     _phantom: PhantomData<F>,
 }
 
-impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
+impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F, D>
     for BigUintDivRemGenerator<F, D>
 {
     fn dependencies(&self) -> Vec<Target> {
@@ -341,6 +346,35 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 
         out_buffer.set_biguint_target(&self.div, &div);
         out_buffer.set_biguint_target(&self.rem, &rem);
+    }
+
+    fn deserialize(src: &mut Buffer, _common_data: &CommonCircuitData<F, D>) -> IoResult<Self>
+    where
+        Self: Sized,
+    {
+        let a = src.read_biguint_target()?;
+        let b = src.read_biguint_target()?;
+        let div = src.read_biguint_target()?;
+        let rem = src.read_biguint_target()?;
+        Ok(Self {
+            a,
+            b,
+            div,
+            rem,
+            _phantom: PhantomData,
+        })
+    }
+
+    fn id(&self) -> String {
+        String::from("BigUintDivRemGenerator")
+    }
+
+    fn serialize(&self, dst: &mut Vec<u8>, _common_data: &CommonCircuitData<F, D>) -> IoResult<()> {
+        dst.write_biguint_target(self.a.clone())?;
+        dst.write_biguint_target(self.b.clone())?;
+        dst.write_biguint_target(self.div.clone())?;
+        dst.write_biguint_target(self.rem.clone())?;
+        Ok(())
     }
 }
 
