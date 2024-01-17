@@ -16,7 +16,7 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::util::ceil_div_usize;
 use plonky2_u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
 use plonky2_u32::gadgets::range_check::range_check_u32_circuit;
-use plonky2_u32::witness::GeneratedValuesU32;
+use plonky2_u32::witness::{GeneratedValuesU32, WitnessU32};
 use crate::serialization::WriteBigUintTarget;
 use crate::serialization::ReadBigUintTarget;
 use crate::gadgets::biguint::{
@@ -449,7 +449,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderNonNative<F, D>
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NonNativeAdditionGenerator<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> {
     a: NonNativeTarget<FF>,
     b: NonNativeTarget<FF>,
@@ -531,7 +531,7 @@ impl<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> SimpleGenerat
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NonNativeMultipleAddsGenerator<F: RichField + Extendable<D>, const D: usize, FF: PrimeField>
 {
     summands: Vec<NonNativeTarget<FF>>,
@@ -622,7 +622,7 @@ impl<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> SimpleGenerat
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NonNativeSubtractionGenerator<F: RichField + Extendable<D>, const D: usize, FF: Field> {
     a: NonNativeTarget<FF>,
     b: NonNativeTarget<FF>,
@@ -701,7 +701,7 @@ impl<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> SimpleGenerat
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NonNativeMultiplicationGenerator<F: RichField + Extendable<D>, const D: usize, FF: Field> {
     a: NonNativeTarget<FF>,
     b: NonNativeTarget<FF>,
@@ -779,7 +779,7 @@ impl<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> SimpleGenerat
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NonNativeInverseGenerator<F: RichField + Extendable<D>, const D: usize, FF: PrimeField> {
     x: NonNativeTarget<FF>,
     inv: BigUintTarget,
