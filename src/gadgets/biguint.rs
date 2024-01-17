@@ -56,10 +56,15 @@ pub trait CircuitBuilderBiguint<F: RichField + Extendable<D>, const D: usize> {
 
     /// Subtract two `BigUintTarget`s. We assume that the first is larger than the second.
     fn sub_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget;
+    fn sqr_biguint(&mut self, a: &BigUintTarget) -> BigUintTarget;
+    fn add_biguint_nc(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget;
+    fn mul_biguint_u32(&mut self, a: &BigUintTarget, b: U32Target) -> BigUintTarget;
 
     fn mul_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget;
 
     fn mul_biguint_by_bool(&mut self, a: &BigUintTarget, b: BoolTarget) -> BigUintTarget;
+
+    fn split_biguint_to_bits(&mut self, x: &BigUintTarget) -> Vec<BoolTarget>;
 
     /// Returns x * y + z. This is no more efficient than mul-then-add; it's purely for convenience (only need to call one CircuitBuilder function).
     fn mul_add_biguint(
@@ -185,6 +190,78 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
         }
     }
 
+    fn add_biguint_nc(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget {
+        let num_limbs = a.num_limbs().max(b.num_limbs());
+
+        let mut combined_limbs = vec![];
+        let mut carry = self.zero_u32();
+        for i in 0..num_limbs {
+            let a_limb = (i < a.num_limbs())
+                .then(|| a.limbs[i])
+                .unwrap_or_else(|| self.zero_u32());
+            let b_limb = (i < b.num_limbs())
+                .then(|| b.limbs[i])
+                .unwrap_or_else(|| self.zero_u32());
+
+            let (new_limb, new_carry) = self.add_u32s_with_carry(&[a_limb, b_limb], carry);
+            carry = new_carry;
+            combined_limbs.push(new_limb);
+        }
+        // combined_limbs.push(carry);
+
+        BigUintTarget {
+            limbs: combined_limbs,
+        }
+    }
+
+    fn sqr_biguint(&mut self, a: &BigUintTarget) -> BigUintTarget {
+        let n = a.limbs.len();
+
+        // naive algorithm: do "half" of the n^2 multiplications, pack the results
+        // into to_add and finally perform all the additions in batch
+        let mut to_add = vec![vec![]; 2 * n];
+        for i in 0..n {
+            // only "half" of the muls
+            for j in 0..=i {
+                let (product, carry) = self.mul_u32(a.limbs[i], a.limbs[j]);
+                to_add[i + j].push(product);
+                to_add[i + j + 1].push(carry);
+                // for double products, push twice into to_add
+                if i != j {
+                    to_add[i + j].push(product);
+                    to_add[i + j + 1].push(carry);
+                }
+            }
+        }
+
+        // additions in batch, with carry
+        let mut combined_limbs = vec![to_add[0][0]];
+        let mut carry = self.zero_u32();
+        for summands in &mut to_add.iter().skip(1) {
+            let (new_result, new_carry) = self.add_u32s_with_carry(summands, carry);
+            combined_limbs.push(new_result);
+            carry = new_carry;
+        }
+        combined_limbs.push(carry);
+
+        BigUintTarget {
+            limbs: combined_limbs,
+        }
+    }
+
+    fn mul_biguint_u32(&mut self, a: &BigUintTarget, b: U32Target) -> BigUintTarget {
+        let mut res = vec![];
+        let mut carry = self.zero_u32();
+        for ai in &a.limbs {
+            let (lo, hi) = self.mul_add_u32(*ai, b, carry);
+            carry = hi;
+            res.push(lo);
+        }
+        res.push(carry);
+
+        BigUintTarget { limbs: res }
+    }
+
     fn mul_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget {
         let total_limbs = a.limbs.len() + b.limbs.len();
 
@@ -274,6 +351,24 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
     fn rem_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget {
         let (_div, rem) = self.div_rem_biguint(a, b);
         rem
+    }
+
+    fn split_biguint_to_bits(&mut self, x: &BigUintTarget) -> Vec<BoolTarget> {
+        let num_limbs = x.num_limbs();
+        let mut result = Vec::with_capacity(num_limbs * 32);
+
+        for i in 0..num_limbs {
+            let limb = x.get_limb(i);
+            let bit_targets = self.split_le_base::<2>(limb.0, 32);
+            let mut bits: Vec<_> = bit_targets
+                .iter()
+                .map(|&t| BoolTarget::new_unsafe(t))
+                .collect();
+
+            result.append(&mut bits);
+        }
+
+        result
     }
 }
 
@@ -388,8 +483,8 @@ mod tests {
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
     use rand::rngs::OsRng;
     use rand::Rng;
-
     use crate::gadgets::biguint::{CircuitBuilderBiguint, WitnessBigUint};
+
 
     #[test]
     fn test_biguint_add() -> Result<()> {
@@ -476,6 +571,35 @@ mod tests {
         pw.set_biguint_target(&y, &y_value);
         pw.set_biguint_target(&expected_z, &expected_z_value);
 
+        dbg!(builder.num_gates());
+        let data = builder.build::<C>();
+        let proof = data.prove(pw).unwrap();
+        data.verify(proof)
+    }
+
+    #[test]
+    fn test_biguint_sqr() -> Result<()> {
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+        let mut rng = OsRng;
+
+        let x_value = BigUint::from_u128(rng.gen()).unwrap();
+        let expected_z_value = &x_value * &x_value;
+
+        let config = CircuitConfig::standard_recursion_config();
+        let mut pw = PartialWitness::new();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+
+        let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
+        let z = builder.sqr_biguint(&x);
+        let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
+        builder.connect_biguint(&z, &expected_z);
+
+        pw.set_biguint_target(&x, &x_value);
+        pw.set_biguint_target(&expected_z, &expected_z_value);
+
+        dbg!(builder.num_gates());
         let data = builder.build::<C>();
         let proof = data.prove(pw).unwrap();
         data.verify(proof)
